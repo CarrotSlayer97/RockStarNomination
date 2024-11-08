@@ -27,9 +27,9 @@
     "bot"
   ],
   "dependencies": {
-    "@ringcentral/sdk": "^4.3.3",
-    "body-parser": ">1.18.2",
-    "dotenv": ">4.0.0",
-    "express": ">4.15.5"
+    "@ringcentral/sdk": "^4.7.4",
+    "body-parser": "^1.20.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.1"
   }
 }

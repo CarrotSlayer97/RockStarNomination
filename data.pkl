@@ -1,0 +1,1 @@
+{"users":{"1609471024":{"userName":"Regan","points":"05","roles":["user","admin","manager"]},"1739857024":{"userName":"CFCC Chatbot","points":0,"roles":["user"]}}}
