@@ -181,12 +181,20 @@ async function promoteUser(userId, groupId, targetUser) {
   }
 }
 
-async function awardPoints(userId, groupId, targetUser) {
+function awardPoints(userId, groupId, targetUser) {
   if (userRegistry.isManager(userId)) {
-    await createPointsCard(groupId, targetUser);
+    createPointsCard(groupId, targetUser);
   } else {
       send_message(groupId, "You don't have permission to award points.");
   }
+}
+
+function removeUser(userId, groupId, targetUser){
+  if (isAdmin(userId)) {
+    //userRegistry.removeUser(targetUser);
+    send_message(groupId, "This function isn't set up yet.")//`${targetUser.userName} has been removed from the system.`)
+  }
+
 }
 
 // Call the main function to start the bot
@@ -273,7 +281,7 @@ app.post('/webhook-callback', async function (req, res) {
     }
 
     else if (body.text == "manage"){
-      send_message(body.groupId, "Whose account do you want to change?")
+      send_message(body.groupId, "Whose account do you want to change? Type their first name:")
     }
 
   //PROMOTE LOGIC
@@ -317,7 +325,7 @@ app.post('/webhook-callback', async function (req, res) {
     }
 
     // else {
-    //   var message = `I do not understand ${body.text}`
+    //   var message = `I don't understand ${body.text}`
     //   send_message( body.groupId, message )
     // } 
   
@@ -358,43 +366,61 @@ app.post('/webhook-callback', async function (req, res) {
 
   else if (actionData.path == 'manage'){
     const groupId = req.body.conversation.id;
-    send_message(groupId, "Whose account do you want to change?")
+    send_message(groupId, "**Whose account do you want to change?** Type their first name:")
   }
 
   else if (actionData.path == 'points'){
-    var points = req.body.data.numPoints; 
+    const points = parseInt(req.body.data.numPoints, 10); //Convert toS integer
     const targetUser = req.body.data.targetUser;
     const groupId = req.body.data.groupId;
-    userRegistry.awardPoints(targetUser, points);
-    send_message(groupId, `You gave ${points} points to ${targetUser.userName}.`);
+    if(!isNaN(points)) {
+      userRegistry.awardPoints(targetUser, points);
+      send_message(groupId, `You gave ${points} points to ${targetUser.userName}.`);
+    }
+    else{
+      send_message(groupId, `${req.body.data.numPoints} is not a valid number.`)
+    }  
   }
 
 
 //add whether or not the user is a manager
   else if (actionData.path == 'user-stats') {
-    const userId = actionData.userId; // Assuming userId is passed in actionData
+    const userId = req.body.user.extId; // Assuming userId is passed in actionData
+    console.log(userId);
     const user = userRegistry.getUser(userId);
     if (user) {
-        send_message(groupId, `${user.userName} has ${user.points} points.`);
+        send_message(groupId, `**${user.userName}'s account: ** \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}`);
     } else {
         send_message(groupId, "User not found.");
     }
   }
 
+  else if (actionData.path == 'look-user') {
+    const targetUser = req.body.data.targetUser;
+    const groupId = req.body.data.groupId;
+    const user = userRegistry.getUser(targetUser.userId);
+    if (user) {
+        send_message(groupId, `**${targetUser.userName}'s account: ** \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}`);
+    } 
+  }
+
 //make it so catalog is called elsewhere and is updatable only by managers
   else if (actionData.path == 'catalog') {
-    const catalogItems = [
-        { name: "Gift Card", cost: 100 },
-        { name: "Snack", cost: 50 },
-        { name: "T-Shirt", cost: 200 }
-    ];
-    const catalogMessage = catalogItems.map(item => `${item.name}: ${item.cost} points`).join('\n');
-    send_message(groupId, `Available prizes:\n${catalogMessage}`);
+    const userId = req.body.user.extId;
+    const card = createCatalogCard(userId, groupId);
+    await send_card(groupId, card);
   }
 
   else if (actionData.path == 'view-employees') {
     const employees = Array.from(userRegistry.users.values()).map(user => `${user.userName} (ID: ${user.userId})`).join('\n');
     send_message(groupId, `Registered Employees:\n${employees}`);
+  }
+
+  else if (actionData.path == 'purge'){
+    const targetUser = req.body.data.targetUser;
+    const groupId = req.body.data.groupId;
+    const adminId = req.body.user.extId;
+    removeUser(adminId, groupId, targetUser);
   }
 
   // make it so only admin can promote a user to manager
@@ -420,23 +446,18 @@ app.post('/webhook-callback', async function (req, res) {
     promoteUser(userId, groupId, targetUser);
   }
 
-  //show users the catalog with option to buy items they can afford
-  else if (actionData.path == 'pts-store') {
-     const userId = actionData.userId; // Assuming userId is passed in actionData
-     const user = userRegistry.getUser(userId);
-     if (user) {
-         // Logic to redeem points, e.g., check if they have enough points
-         const itemToRedeem = actionData.item; // Assuming item is passed in actionData
-         const itemCost = 100; // Example cost
-         if (user.points >= itemCost) {
-             user.points -= itemCost; // Deduct points
-             send_message(groupId, `You have redeemed ${itemToRedeem}.`);
-         } else {
-             send_message(groupId, "You don't have enough points to redeem this item.");
-          }
-      } else {
-         send_message(groupId, "User not found.");
-     }
+  else if (actionData.path == 'buy') {
+    const userId = actionData.userId; 
+    const user = userRegistry.getUser(userId);
+    const prize = actionData.itemName;
+    const cost = actionData.itemCost
+    if (user.points >= cost) {
+      userRegistry.buyPrize(user, prize, cost);
+      send_message(groupId, `**🎉 Congratulations ${user.userName}🎉** \nShow this message to redeemed your hard earned ${prize}!`);
+    } 
+    else {
+      send_message(groupId, `You don't have enough points to buy ${prize}.`);
+    }
    }
 
 }
@@ -740,16 +761,18 @@ function make_new_name_card(name) {
     const isManager = userRegistry.isManager(userId);
 
     const actions = isManager ? [
-        { type: "Action.Submit", title: "Manage an Employee", data: { action: "manage", path: "manage", groupId: groupId }  },
-        { type: "Action.Submit", title: "View Leaderboard", data: { action: "view_leaderboard", path: "leaderboard" } },
-        { type: "Action.Submit", title: "Employee List", data: { action: "employee_list", path: "view-employees" } },
-        { type: "Action.Submit", title: "Help", data: { action: "system_functions", path: "help" } }
+        { type: "Action.Submit", title: "☑️ Manage an Employee", data: { action: "manage", path: "manage", groupId: groupId }  },
+        { type: "Action.Submit", title: "🏆Leaderboard", data: { action: "view_leaderboard", path: "leaderboard" } },
+        { type: "Action.Submit", title: "📋Employee List", data: { action: "employee_list", path: "view-employees" } },
+        { type: "Action.Submit", title: "🎁Prizes", data: { action: "available_prizes", path: "catalog" } },
+        { type: "Action.Submit", title: "❔Help", data: { action: "system_functions", path: "help" } }
     ] : [
-        { type: "Action.Submit", title: "My Status", data: { action: "my_status", path: "user-stats" } },
-        { type: "Action.Submit", title: "Available Prizes", data: { action: "available_prizes", path: "catalog" } },
-        { type: "Action.Submit", title: "View Leaderboard", data: { action: "view_leaderboard", path: "leaderboard" } },
-        { type: "Action.Submit", title: "Spend Points", data: { action: "spend_points", path: "pts-store" } }
+        { type: "Action.Submit", title: "🤸My Status", data: { action: "my_status", path: "user-stats" } },
+        { type: "Action.Submit", title: "🎁Prizes", data: { action: "available_prizes", path: "catalog" } },
+        { type: "Action.Submit", title: "🏆Leaderboard", data: { action: "view_leaderboard", path: "leaderboard" } },
+        { type: "Action.Submit", title: "❔Help", data: { action: "system_functions", path: "help" } }
     ];
+   
 
     return {
         type: "AdaptiveCard",
@@ -792,7 +815,7 @@ function createManageCard (targetUser, groupId) {
     ],
     actions: [{type: "Action.Submit", title: "Promote User", data: {action: "promote_user", path: "promotion", targetUser: targetUser, groupId: groupId}},
               {type: "Action.Submit", title: "Award Points", data: {action: "award_points", path: "award-pts", targetUser: targetUser, groupId: groupId}},
-              {type: "Action.Submit", title: "View Status", data: {action: "view_status", path: "look-user", targetUser: targetUser, groupId: groupId}}, 
+              {type: "Action.Submit", title: "View Their Status", data: {action: "view_status", path: "look-user", targetUser: targetUser, groupId: groupId}}, 
               {type: "Action.Submit", title: "Remove User", data: {path: "purge", action: "remove_user", targetUser: targetUser, groupId: groupId}}
             ]
       };
@@ -818,7 +841,7 @@ function createPointsCard (groupId, targetUser){
       {
         type: "Input.Text",
         id: "numPoints",
-        placeholder: "Enter a number"
+        placeholder: "Enter a number (eg. 3)"
       },
       {
         type: "ActionSet",
@@ -840,18 +863,71 @@ function createPointsCard (groupId, targetUser){
   send_card(groupId, card);
 }
 
-// Function to handle user responses
-async function handleUserResponse(userId, inputText, groupId) {
-  // Process the inputText as needed
-  // For example, if the input is a username to promote:
-  const points = (inputText); // Implement this method to find user by name
-  if (targetUser) {
-      userRegistry.promoteUser(targetUser); // Promote the user
-      await send_message(groupId, `${targetUser.userName} has been promoted to manager.`);
-  } else {
-      await send_message(groupId, "User not found. Please enter a valid username.");
-  }
+function createCatalogCard(userId, groupId) {
+  const user = userRegistry.getUser(userId);
+  const currentPoints = user ? user.points : 0; // Get current points or default to 0
 
-  // Clear the waiting state
-  userInputStates[userId] = false;
+  const catalogItems = userRegistry.getCatalog(); // Get catalog items from UserRegistry
+
+  // Create the body of the adaptive card
+  const body = [
+      {
+          type: "TextBlock",
+          text: " 🎁 Prizes 🎁",
+          size: "Medium",
+          weight: "Bolder"
+      },
+      {
+          type: "ColumnSet",
+          columns: [
+            {
+              type: "Column",
+              width: "stretch", // auto for horizontal layout //stretch to fill available space
+              items: catalogItems.map((item, index) => [
+                  {
+                      type: "TextBlock",
+                      text: `${item.name}`,
+                      wrap: true
+                  },
+                  {
+                      type: "ActionSet",
+                      actions: [
+                          {
+                              type: "Action.Submit",
+                              title: `Buy for ${item.cost} points`,
+                              data: {
+                                  path: "buy",
+                                  itemName: item.name,
+                                  itemCost: item.cost,
+                                  userId: userId,
+                                  groupId: groupId
+                              }
+                          }
+                      ]
+                  },
+                  {
+                    type: "TextBlock",
+                    text: "", //empty textblock for spacing
+                    wrap: true
+                  }
+              ]).flat() //Flatten the array of items
+            }
+          ]
+      },
+      {
+          type: "TextBlock",
+          text: `You have ${currentPoints} points.`,
+          size: "Medium",
+          weight: "Bolder"
+      }
+  ];
+
+  // Return the complete adaptive card
+  return {
+      type: "AdaptiveCard",
+     $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+     version: "1.3",
+     body: body,
+     actions: [] // You can add global actions if needed
+  };
 }

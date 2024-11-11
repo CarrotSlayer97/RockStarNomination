@@ -12,6 +12,12 @@ class UserRegistry {
     constructor() {
         this.users = new Map(); // Use a Map to store users by ID
         this.ADMIN_USER_ID = 1609471024;
+        this.catalogItems = [
+            { name: "Smartfood Popcorn", cost: 50 },
+            { name: "CFCC Educator T-Shirt", cost: 100 },
+            { name: "CFCC Educator Hoodie", cost: 200 },
+            { name: "Date with Justin Bieber", cost: 1000 }
+        ];
     }
 
     load(data) {
@@ -20,7 +26,7 @@ class UserRegistry {
             const userInfo = parsedData.users[userId];
             this.registerUser(userId, userInfo.userName, userInfo.roles); // Register each user
             const user = this.getUser(userId);
-            user.points = userInfo.points; // Set user points if available
+            user.points = parseInt(userInfo.points, 10) || 0; // Set user points if available
             user.roles = userInfo.roles;
         }
         console.log("Users loaded successfully.");
@@ -74,11 +80,33 @@ class UserRegistry {
     awardPoints(targetUser, points) {
         if (targetUser) {
             const name = targetUser.userName
-            targetUser.points += points; // Award points to the user
-            console.log(`Gave ${points} points to ${name}.`)
-            //Update the user in the registry
-            this.users.set(targetUser.userId, targetUser);
-            this.saveData();
+            const pointsToAward = parseInt(points, 10);
+            if (!isNaN(pointsToAward)){
+                targetUser.points += pointsToAward; // Award points to the user
+                console.log(`Gave ${pointsToAward} points to ${name}.`)
+                //Update the user in the registry
+                this.users.set(targetUser.userId, targetUser);
+                this.saveData();
+            }
+            else{
+                console.log(`Invalid points value: ${points}`);
+            }
+
+        }
+    }
+
+    buyPrize(user, prize, cost) {
+        if (user) {
+            if (!isNaN(cost)) {
+                if (user.points >= cost) {
+                    user.points -= cost; // Deduct points spent
+                    console.log(`${user.userName} spent points on ${prize}.`)
+                    //Update the user in the registry
+                    this.users.set(user.userId, user);
+                    this.saveData();
+                }
+            }
+
         }
     }
 
@@ -88,6 +116,10 @@ class UserRegistry {
             .sort((a, b) => b.points - a.points)
             .map((user, index) => `${index + 1}. ${user.userName}: ${user.points}`) // Number the users
             .join('\n'); // Join the entries with a newline
+    }
+
+    getCatalog() {
+        return this.catalogItems; // Returns the catalogItems array directly
     }
 
         // Method to promote a user to manager
@@ -109,6 +141,14 @@ class UserRegistry {
                 }
         }else {
             console.log(`User not found.`);
+        }
+    }
+
+    removeUser(targetUser){
+        if(targetUser) {
+            // this.targetUsers.delete(targetUser.userId); // Remove the user from the Map
+            // console.log(`User ${targetUser.userName} has been removed.`);
+            // this.saveData(); // Save the updated user data to the file
         }
     }
         
