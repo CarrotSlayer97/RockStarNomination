@@ -71,11 +71,9 @@ class UserRegistry {
         }
     }
 
-
     getUser(userId) {
         return this.users.get(userId);
     }
-
 
     awardPoints(targetUser, points) {
         if (targetUser) {
@@ -152,8 +150,6 @@ class UserRegistry {
         }
     }
         
-
-       // Method to check if a user is a manager
     isManager(userId) {
         const user = this.getUser(userId); // Retrieve the user by ID
         return user ? user.roles.includes('manager') : false; // Check if the user's role is 'manager'

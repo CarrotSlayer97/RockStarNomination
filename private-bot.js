@@ -72,7 +72,6 @@ function main() {
   // Load user data at startup
   loadData();
 
-
   // Start ring server
   app.listen(PORT, function() {
     console.log("Bot server listening on port " + PORT);
@@ -81,8 +80,6 @@ function main() {
 }
 
 const userPoints = {}; // Object to store user points
-const userInputStates = {}; //Object to track user input state
-
 
 // Bot starts/restarts => check if there is a saved token
 async function loadSavedTokens(){
@@ -103,7 +100,6 @@ async function loadSavedTokens(){
     console.log("Note: If the bot was installed, remove it and reinstall to get a new access token")
   }
 }
-
 
 // Oauth handler
 // store the access token in a file if token is lost remove and reinstall the bot 
@@ -139,8 +135,6 @@ app.post('/oauth', async function (req, res) {
   }
 });
 
-
-// Initialize user points
 async function initializeUser(userId) {
   const userInfo = await getUserInfo(userId);  
     if (!userRegistry.getUser(userId) && userInfo) {
@@ -158,14 +152,11 @@ function isAdmin(userId){
   false;
 }
 
-// Get user points
 function getUserPoints(userId) {
   return userPoints[userId] || 0; // Return points or 0 if not found
 }
 
-
-
-// Promote a user to manager
+//give manager role
 async function promoteUser(userId, groupId, targetUser) {
   console.log(targetUser);
   if (isAdmin(userId)) { // Check if the requester is admin
@@ -194,21 +185,12 @@ function removeUser(userId, groupId, targetUser){
     //userRegistry.removeUser(targetUser);
     send_message(groupId, "This function isn't set up yet.")//`${targetUser.userName} has been removed from the system.`)
   }
-
 }
 
 // Call the main function to start the bot
 if (require.main === module) {
   main();
 }
-
-// Export the functions
-module.exports = {
-  initializeUser,
-  awardPoints,
-  getUserPoints,
-  promoteUser
-};
 
 async function getUserInfo(userId) {
   try {
@@ -222,13 +204,9 @@ async function getUserInfo(userId) {
   }
 }
 
-
-// Handles webhook notifications-- invoked when a user sends a message and when
-// the bot is added to/removed from a group or a team etc.
+// Handles webhook notifications-- invoked by users
 app.post('/webhook-callback', async function (req, res) {
   var validationToken = req.get('Validation-Token');
-
-// SET UP
   if (validationToken) {
     console.log('Verifying webhook token.');
     res.setHeader('Validation-Token', validationToken);
@@ -238,92 +216,75 @@ app.post('/webhook-callback', async function (req, res) {
   }  
 
   console.log("Receieved request", req.body);
-  // Check if the body and eventType are defined
-
 
   if (req.body.body && req.body.body.text) {
     const body = req.body.body;
     const userId = body.creatorId;
+    const botId = req.body.ownerId;
+    const groupId = body.groupId;
     const inputText =  body.text.trim();
     const targetUser =  Array.from(userRegistry.users.values()).find(u => u.userName.toLowerCase() === inputText.toLowerCase());
 
-     
       if (req.body.body.eventType === "PostAdded") {
-          console.log("Received user's message: " + body.text);
-          // Your logic for handling PostAdded events  
-        
+          console.log("Received message: " + body.text);
 
-        if (targetUser){ 
-          await showManageMenu(body.groupId, targetUser);
+           
+        if (targetUser){ //if a valid name is entered
+          await showManageMenu(groupId, targetUser);
+          console.log(targetUser);
         }
 
-      // Check if the user is already registered
-      if (!userRegistry.getUser(userId)) {
-      // Fetch user info from RingCentral
-       const userInfo = await getUserInfo(userId);
-      if (userInfo) {
-        initializeUser(userId);
-      } 
-      else {
-        await send_message(req.body.groupId, "Failed to register user.");
+        if (req.body.ownerId == body.creatorId) {
+          console.log("Ignoring message posted by bot.");
+          return;
+        }
+
+        // Check if the user isn't registered
+        if (!userRegistry.getUser(userId) && (userId != botId)) {
+          // Fetch user info from RingCentral
+          const userInfo = await getUserInfo(userId);
+          if (userInfo) {
+            await initializeUser(userId);
+            await send_message(body.groupId, "Registering user...");
+            const user = userRegistry.getUser(userId);
+            const userName = user.userName;
+            await send_message(groupId, `Greetings, ${userName} and welcome to the CFCC points system!`)
+            await showMainMenu(groupId, userId);
+          } 
+          else {
+            await send_message(req.body.groupId, "Failed to register user.");
+          } 
         } 
-    } 
-  
-    if (req.body.ownerId == body.creatorId) {
-      console.log("Ignoring message posted by bot.");
 
-    }
-  
-    else if (body.text == "ping") {
-      send_message( body.groupId, "pong" );
-      var card = make_hello_world_card(null);
-      send_card( body.groupId, card )
-    }
+        else if (body.text == "ping") {
+          send_message( body.groupId, "pong" );
+        }
 
-    else if (body.text == "manage"){
-      send_message(body.groupId, "Whose account do you want to change? Type their first name:")
-    }
+        else if (body.text == "manage"){
+          send_message(body.groupId, "Whose account do you want to change? Type their first name:")
+        }
 
-  //PROMOTE LOGIC
-    else if (body.text === "promote_user") { // Handle the promote user button press
-      await send_message(body.groupId, "Please enter the username of the user you want to promote:");
-    }
-  
-  //POINTS LOGIC
-    else if (body.text === "points") {
-      const points = userRegistry.getUser(userId).points;
-      await send_message(body.groupId, `You have ${points} points.`);
-    } 
+        //MAIN MENU LOGIC
+        else { 
+          const user = userRegistry.getUser(userId); 
+          if (user) {
+            //await send_message(groupId, `Greetings, ${userName}!`); Welcome to the CFCC Points System. \nThe system is a tech-savvy initiative that rewards you for your exceptional performance.`);
+            await showMainMenu(groupId, userId); 
+          } 
+        }
 
-    else if (body.text.startsWith("give_points")) {
-      //Give points
-      const [_, targetUserId, points] = body.text.split(" ");
-      if (userRegistry.isManager(userId)) {
-        userRegistry.awardPoints(targetUserId, parseInt(points)); // Implement awardPoints in UserRegistry
-        await send_message(body.groupId, `Awarded ${points} points to user ${targetUserId}.`);
-      } 
-      else {
-        await send_message(body.groupId, "You don't have permission to give points.");
-      } 
-    } 
-    else if (body.text === "leaderboard") {
-      const leaderboard = userRegistry.getLeaderboard(); // Implement getLeaderboard in UserRegistry
-      send_message(body.groupId, `🏆 **Leaderboard** 🏆 \n${leaderboard}`);
-    } 
-
-    //WELCOME MESSAGE
-    else if (body.text == "hello") {
-      const userId = body.creatorId; //takes message sender's user id  
-      const user = userRegistry.getUser(userId); 
-      if (user) {
-        const userName = user.userName;
-        await send_message(body.groupId, `Greetings, ${userName}! Welcome to the CFCC Points System. \nThe system is a tech-savvy initiative that rewards you for your exceptional performance.`);
-        await showMainMenu(body.groupId, userId); 
-      } else {
-          await send_message(body.groupId, "Registering user.");
-      }
-    }
-
+    // else if (body.text.startsWith("give_points")) {
+    //   //Give points
+    //   const [_, targetUserId, points] = body.text.split(" ");
+    //   if (userRegistry.isManager(userId)) {
+    //     userRegistry.awardPoints(targetUserId, parseInt(points)); // Implement awardPoints in UserRegistry
+    //     await send_message(body.groupId, `Awarded ${points} points to user ${targetUserId}.`);
+    //   } 
+    //   else {
+    //     await send_message(body.groupId, "You don't have permission to give points.");
+    //   } 
+    // }
+    
     // else {
     //   var message = `I don't understand ${body.text}`
     //   send_message( body.groupId, message )
@@ -331,139 +292,108 @@ app.post('/webhook-callback', async function (req, res) {
   
   //END OF TEXT COMMANDS
 
-} else {
-  console.log("Event type is not recognized:", req.body.body.eventType);
-}
-} else if (req.body.conversation) {
-  
-  console.log("Event does not have a body. ");
-  console.log("Request body:", JSON.stringify(req.body, null, 2)); // Log the request body
-  console.log("Request params:", JSON.stringify(req.params, null, 2)); // Log request parameters
-  console.log("Request query:", JSON.stringify(req.query, null, 2)); // Log request query
-  
-  const actionData = req.body.data;
-  const groupId = req.body.conversation.id;
-  console.log(actionData);
-  if (!actionData || !groupId) {
-    return;
-  }
-  
-  if (actionData.path == 'leaderboard') {
-    
-    console.log("Followed leaderboard path.")
-    const leaderboard = userRegistry.getLeaderboard(); // Implement getLeaderboard in UserRegistry
-    send_message(groupId, `🏆 **Leaderboard** 🏆 \n${leaderboard}`);
-  }
-  
-//add a request to the manager to type the name of the user they want to award point + how many points they're giving
-  else if (actionData.path == 'award-pts') {
-    const managerId = req.body.user.extId;
-    const targetUser = req.body.data.targetUser;
+      }     
+  }     
+  else if (req.body.conversation) {
+    const actionData = req.body.data;
     const groupId = req.body.conversation.id;
-    awardPoints(managerId, groupId, targetUser);
+    if (!actionData || !groupId) {
+      await send_message("Something went wrong.")
+      return;
+    }
+
+    if (actionData.path == 'leaderboard') {
+      const leaderboard = userRegistry.getLeaderboard(); // Implement getLeaderboard in UserRegistry
+      send_message(groupId, `🏆 **Leaderboard** 🏆\n \n${leaderboard}`);
+    }
+  
+    else if (actionData.path == 'award-pts') {
+      const managerId = req.body.user.extId;
+      const targetUser = req.body.data.targetUser;
+      awardPoints(managerId, groupId, targetUser);
    
-     }
-
-  else if (actionData.path == 'manage'){
-    const groupId = req.body.conversation.id;
-    send_message(groupId, "**Whose account do you want to change?** Type their first name:")
-  }
-
-  else if (actionData.path == 'points'){
-    const points = parseInt(req.body.data.numPoints, 10); //Convert toS integer
-    const targetUser = req.body.data.targetUser;
-    const groupId = req.body.data.groupId;
-    if(!isNaN(points)) {
-      userRegistry.awardPoints(targetUser, points);
-      send_message(groupId, `You gave ${points} points to ${targetUser.userName}.`);
     }
-    else{
-      send_message(groupId, `${req.body.data.numPoints} is not a valid number.`)
-    }  
-  }
 
+    else if (actionData.path == 'manage'){
+      send_message(groupId, "Whose account do you want to change? **Type their first name: **")
+    }
 
-//add whether or not the user is a manager
-  else if (actionData.path == 'user-stats') {
-    const userId = req.body.user.extId; // Assuming userId is passed in actionData
-    console.log(userId);
-    const user = userRegistry.getUser(userId);
-    if (user) {
-        send_message(groupId, `**${user.userName}'s account: ** \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}`);
-    } else {
+    else if (actionData.path == 'numPoints'){
+      const points = parseInt(req.body.data.numPoints, 10); //Convert toS integer
+      const targetUser = req.body.data.targetUser;
+      if(!isNaN(points)) {
+        userRegistry.awardPoints(targetUser, points);
+        send_message(groupId, `You gave ${points} points to ${targetUser.userName}.`);
+      }
+      else{
+        send_message(groupId, `${req.body.data.numPoints} is not a valid number.`)
+      }  
+    }
+
+    else if (actionData.path == 'user-stats') {
+      const userId = req.body.user.extId; 
+      console.log(userId);
+      const user = userRegistry.getUser(userId);
+      if (user) {
+        send_message(groupId, `**Here's your account info:**\n \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}\nRole: ${user.roles}`);
+      } else {
         send_message(groupId, "User not found.");
+      }
+    }
+
+    else if (actionData.path == 'look-user') {
+      const targetUser = req.body.data.targetUser;
+      const user = userRegistry.getUser(targetUser.userId);
+      if (user) {
+        send_message(groupId, `**Here's ${targetUser.userName}'s account info **\n \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}`);
+      } 
+    }
+
+    else if (actionData.path == 'catalog') {
+      const userId = req.body.user.extId;
+      const card = createCatalogCard(userId, groupId);
+      await send_card(groupId, card);
+    }
+
+    else if (actionData.path == 'view-employees') {
+      const employees = Array.from(userRegistry.users.values()).map(user => `${user.userName} (ID: ${user.userId})`).join('\n');
+      send_message(groupId, `Registered Employees:\n${employees}`);
+    }
+
+    else if (actionData.path == 'purge'){
+      const targetUser = req.body.data.targetUser;
+      const adminId = req.body.user.extId;
+      removeUser(adminId, groupId, targetUser);
+    }
+
+    else if (actionData.path == 'help') {
+      const userId = req.body.user.extId;
+      const card = helpCard(userId, groupId)
+      await send_card(groupId, card);
+    } 
+
+    else if (actionData.path == 'promotion') {
+      console.log("promoter");
+      console.log(req.body);
+      const userId = req.body.user.extId;
+      const targetUser = req.body.data.targetUser;
+      promoteUser(userId, groupId, targetUser);
+    }
+
+    else if (actionData.path == 'buy') {
+      const userId = actionData.userId; 
+      const user = userRegistry.getUser(userId);
+      const prize = actionData.itemName;
+      const cost = actionData.itemCost
+      if (user.points >= cost) {
+        userRegistry.buyPrize(user, prize, cost);
+        send_message(groupId, `**🎉 Congratulations ${user.userName}🎉** \nShow this message to redeemed your hard earned ${prize}!`);
+      } 
+      else {
+        send_message(groupId, `You don't have enough points to buy ${prize}.`);
+      }
     }
   }
-
-  else if (actionData.path == 'look-user') {
-    const targetUser = req.body.data.targetUser;
-    const groupId = req.body.data.groupId;
-    const user = userRegistry.getUser(targetUser.userId);
-    if (user) {
-        send_message(groupId, `**${targetUser.userName}'s account: ** \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}`);
-    } 
-  }
-
-//make it so catalog is called elsewhere and is updatable only by managers
-  else if (actionData.path == 'catalog') {
-    const userId = req.body.user.extId;
-    const card = createCatalogCard(userId, groupId);
-    await send_card(groupId, card);
-  }
-
-  else if (actionData.path == 'view-employees') {
-    const employees = Array.from(userRegistry.users.values()).map(user => `${user.userName} (ID: ${user.userId})`).join('\n');
-    send_message(groupId, `Registered Employees:\n${employees}`);
-  }
-
-  else if (actionData.path == 'purge'){
-    const targetUser = req.body.data.targetUser;
-    const groupId = req.body.data.groupId;
-    const adminId = req.body.user.extId;
-    removeUser(adminId, groupId, targetUser);
-  }
-
-  // make it so only admin can promote a user to manager
-  else if (actionData.path == 'help') {
-    const helpMessage = `
-    Here are the commands you can use:
-    - **leaderboard**: View the leaderboard.
-    - **points**: Check your points.
-    - **give_points [userId] [points]**: Award points to a user (Manager only).
-    - **promote_user**: Promote a user to manager (Manager only).
-    - **catalog**: View available prizes.
-    - **view-employees**: List all registered users.
-    `;
-    send_message(groupId, helpMessage);
-  } 
-
-  else if (actionData.path == 'promotion') {
-    console.log("promoter");
-    console.log(req.body);
-    const userId = req.body.user.extId;
-    const targetUser = req.body.data.targetUser;
-    const groupId = req.body.conversation.id;
-    promoteUser(userId, groupId, targetUser);
-  }
-
-  else if (actionData.path == 'buy') {
-    const userId = actionData.userId; 
-    const user = userRegistry.getUser(userId);
-    const prize = actionData.itemName;
-    const cost = actionData.itemCost
-    if (user.points >= cost) {
-      userRegistry.buyPrize(user, prize, cost);
-      send_message(groupId, `**🎉 Congratulations ${user.userName}🎉** \nShow this message to redeemed your hard earned ${prize}!`);
-    } 
-    else {
-      send_message(groupId, `You don't have enough points to buy ${prize}.`);
-    }
-   }
-
-}
-
-        //I DON'T THINK I NEED THIS BUT WHO KNOWS
-
 // if (req.body.body.eventType == 'Delete'){
 //   console.log('Bot is being uninstalled by a user => clean up resources')
 //   // clear local file/database
@@ -476,25 +406,9 @@ app.post('/webhook-callback', async function (req, res) {
 // console.log(req.body.body)
 // }
   
-  
   // End the response
   res.status(200).end();
-
 });
-
-
-//Function to show the main menu
-async function showMainMenu(groupId, userId) {
-  const card = createMainMenuCard(userId); // Create the main menu card
-  await send_card(groupId, card); // Send the card to the group
-}
-
-async function showManageMenu (groupId, targetUser){
-  const card = createManageCard(targetUser, groupId);
-  await send_card(groupId, card);
-}
-
-
 
 // Method to Subscribe for events notification.
 async function subscribeToEvents(){
@@ -550,8 +464,7 @@ async function renewSubscription(id) {
       console.error("An error occurred while renewing the subscription:", error);
       throw error; // Rethrow the error for further handling if needed
       }
-  } 
-  
+} 
 
 // Check Webhook subscription status
 async function checkWebhooksSubscription(subscriptionId) {
@@ -582,69 +495,6 @@ async function checkWebhooksSubscription(subscriptionId) {
   }
 }
 
-// This handler is called when a user submits data from an adaptive card
-//What happens after button is pushed
-app.post('/user-submit', async function (req, res) {
-  
-  console.log( "Received card event." );
-  const body = req.body;
-
-  if (body.data.path == 'points'){
-    console.log("yup")
-    var points = body.data.numPoints; 
-    const targetUser = body.data.targetUser;
-    const groupId = body.data.groupId;
-    await userRegistry.awardPoints(targetUser, points);
-    send_message(groupId, `You awarded ${points} points to user ${targetUser.userName}.`);
-  }
-
-  if (body.data.path == 'new-card'){
-    var card = make_new_name_card( body.data.hellotext )
-    send_card( body.conversation.id, card)
-  }
-  else if (body.data.path == 'update-card'){
-    var card = make_hello_world_card( body.data.hellotext )
-    update_card( body.card.id, card )
-    }
-
-  // Check if the request is form a button click
-  if (body.type =='button_submit'){
-    console.log("button clicked:", req.body.data);
-    //Acess the action data
-    const userId = req.body.user.extId;
-    const groupId = req.body.conversation.id;
-  
-    if (body.data.path == 'award-pts') {
-
-    }
-    else if (actionData.path == 'leaderboard') {
-      console.log("path followed to leaderboard")
-      const leaderboard = userRegistry.getLeaderboard(); // Implement getLeaderboard in UserRegistry
-      send_message(groupId, `🏆 Leaderboard: ${leaderboard}`);
-    }
-    else if (body.data.path == 'user-stats'){
-
-    }
-    else if (body.data.path == 'catalog') {
-
-    }
-    else if (body.data.path == 'view-employees') {
-    
-    }
-    else if (body.data.path == 'help') {
-    
-    }
-    else if (body.data.path == 'promotion') {
-    
-    }
-    else if (body.data.path == 'pts-store') {
-
-    }
-  }
-
-  res.status(200).end();
-});
-
 // Post a message to a chat
 async function send_message( groupId, message ) {
   console.log("Posting response to group: " + groupId);
@@ -667,136 +517,133 @@ async function send_card(groupId, card) {
   }
 }
 
-// Update an adaptive card
-async function update_card( cardId, card ) {
-  console.log("Updating card...");
-  try {
-    var resp = await platform.put(`/restapi/v1.0/glip/adaptive-cards/${cardId}`, card)
-  }catch (e) {
-    console.log(e.message)
+async function showMainMenu(groupId, userId) {
+  if (userRegistry.isManager(userId)){
+    const card = managerMenu(); // Create the menu card
+    await send_card(groupId, card); // Send the card to the group
+  }
+  else {
+    const card = userMenu();
+    await send_card(groupId, card); 
   }
 }
 
-function make_hello_world_card(name) {
-  var card = {
-    type: "AdaptiveCard",
-    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
-    version: "1.3",
-    body: [
-      {
-        type: "TextBlock",
-        size: "Medium",
-        weight: "Bolder",
-        text: "Hello World"
-      },
-      {
-        type: "TextBlock",
-        text: "Enter your name in the field below so that I can say hello.",
-        wrap: true
-      },
-      {
-        type: "Input.Text",
-        id: "hellotext",
-        placeholder: "Enter your name"
-      },
-      {
-        type: "ActionSet",
-        actions: [
+async function showManageMenu (groupId, targetUser){
+  const card = createManageCard(targetUser, groupId);
+  await send_card(groupId, card);
+}
+
+function managerMenu() {
+    const card = {
+      type: "AdaptiveCard",
+      $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+      version: "1.3",
+      body: [
           {
-            type: "Action.Submit",
-            title: "Send a new card",
-            data: {
-              path: "new-card"
-            }
+              type: "TextBlock",
+              text: "It's Time to Win Big!",
+              size: "Large",
+              weight: "Bolder"
           },
           {
-            type: "Action.Submit",
-            title: "Update this card",
-            data: {
-              path: "update-card"
-            }
-          }
-        ]
-      }
-    ]
-  }
-  if (name){
-    card.body.push({
-      type: "Container",
-      separator: true,
-      items: [
+              type: "TextBlock",
+              text: "Earn points in the gym to get fliptastic prizes!",
+              size: "Medium",
+              wrap: true
+          },
+          {
+            type: "TextBlock",
+            text: "Manage Points or Users",
+            wrap: true
+          },
+          {
+            type: "ActionSet",
+            actions: [
+                {
+                    type: "Action.Submit",
+                    title: "📋", 
+                    data: { path: "catalog" } 
+                }
+            ]
+          },
+          {
+            type: "TextBlock",
+            text: "Employee List",
+            wrap: true
+          },
+          {
+            type: "ActionSet",
+            actions: [
+                {
+                    type: "Action.Submit",
+                    title: "🗂️",
+                    data: { path: "catalog" } 
+                }
+            ]
+          },
+          {
+            type: "TextBlock",
+            text: "Prize Catalog",
+            wrap: true
+        },
         {
-          type: "TextBlock",
-          text: `Hello ${name}`,
-          wrap: true
+            type: "ActionSet",
+            actions: [
+                {
+                    type: "Action.Submit",
+                    title: "🎁", // Button with only the emoji
+                    data: { path: "catalog" } 
+                }
+            ]
+        },
+        {
+            type: "TextBlock",
+            text: "Leaderboard",
+            wrap: true
+        },
+        {
+            type: "ActionSet",
+            actions: [
+                {
+                    type: "Action.Submit",
+                    title: "🏆", // Button with only the emoji
+                    data: { action: "view_leaderboard", path: "leaderboard" }
+                }
+            ]
+        },
+        {
+            type: "TextBlock",
+            text: "My Account",
+            wrap: true
+        },
+        {
+            type: "ActionSet",
+            actions: [
+                {
+                    type: "Action.Submit",
+                    title: "🤸", // Button with only the emoji
+                    data: { action: "my_status", path: "user-stats" }
+                }
+            ]
+        },
+        {
+            type: "TextBlock",
+            text: "Learn more",
+            wrap: true
+        },
+        {
+            type: "ActionSet",
+            actions: [
+                {
+                    type: "Action.Submit",
+                    title: "📚", // Button with only the emoji
+                    data: { action: "learn_more", path: "learn" } // Adjust the path as needed
+                }
+            ]
         }
-      ]
-    })
-  }
-  return card
-}
-
-function make_new_name_card(name) {
-  return {
-    "type": "AdaptiveCard",
-    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-    "version": "1.3",
-    "body": [
-      {
-        "type": "TextBlock",
-        "size": "Medium",
-        "weight": "Bolder",
-        "text": "Hello World"
-      },
-      {
-        "type": "TextBlock",
-        "text": `Hello ${name}`,
-        "wrap": true
-      }
     ]
-    }
-  }
-  function createMainMenuCard(userId, groupId) {
-    const user = userRegistry.getUser(userId);
-    const isManager = userRegistry.isManager(userId);
-
-    const actions = isManager ? [
-        { type: "Action.Submit", title: "☑️ Manage an Employee", data: { action: "manage", path: "manage", groupId: groupId }  },
-        { type: "Action.Submit", title: "🏆Leaderboard", data: { action: "view_leaderboard", path: "leaderboard" } },
-        { type: "Action.Submit", title: "📋Employee List", data: { action: "employee_list", path: "view-employees" } },
-        { type: "Action.Submit", title: "🎁Prizes", data: { action: "available_prizes", path: "catalog" } },
-        { type: "Action.Submit", title: "❔Help", data: { action: "system_functions", path: "help" } }
-    ] : [
-        { type: "Action.Submit", title: "🤸My Status", data: { action: "my_status", path: "user-stats" } },
-        { type: "Action.Submit", title: "🎁Prizes", data: { action: "available_prizes", path: "catalog" } },
-        { type: "Action.Submit", title: "🏆Leaderboard", data: { action: "view_leaderboard", path: "leaderboard" } },
-        { type: "Action.Submit", title: "❔Help", data: { action: "system_functions", path: "help" } }
-    ];
-   
-
-    return {
-        type: "AdaptiveCard",
-        $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
-        version: "1.3",
-        body: [
-            {
-                type: "TextBlock",
-                text: "Main Menu",
-                size: "Medium",
-                weight: "Bolder"
-            },
-            {
-                type: "TextBlock",
-                text: "How can I help you today?",
-                wrap: true
-            },
-            {
-              type: "ActionSet",
-              actions: actions
-            
-            }
-        ]
-    };
+  };
+  return card;
 }
 
 function createManageCard (targetUser, groupId) {
@@ -850,7 +697,7 @@ function createPointsCard (groupId, targetUser){
             type: "Action.Submit",
             title: "Enter",
             data: {
-              path: "points",
+              path: "numPoints",
               targetUser : targetUser,
               groupId : groupId
             }
@@ -931,3 +778,175 @@ function createCatalogCard(userId, groupId) {
      actions: [] // You can add global actions if needed
   };
 }
+
+function userMenu(){
+  const userMenu = {
+    type: "AdaptiveCard",
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.3",
+    body: [
+        {
+            type: "TextBlock",
+            text: "It's Time to Win Big!",
+            size: "Large",
+            weight: "Bolder"
+        },
+        {
+            type: "TextBlock",
+            text: "Earn points in the gym to get fliptastic prizes!",
+            size: "Medium",
+            wrap: true
+        },
+        {
+          type: "TextBlock",
+          text: "Stock up on snacks and merch",
+          wrap: true
+      },
+      {
+          type: "ActionSet",
+          actions: [
+              {
+                  type: "Action.Submit",
+                  title: "🎁", // Button with only the emoji
+                  data: { path: "catalog" } 
+              }
+          ]
+      },
+      {
+          type: "TextBlock",
+          text: "See who's on top",
+          wrap: true
+      },
+      {
+          type: "ActionSet",
+          actions: [
+              {
+                  type: "Action.Submit",
+                  title: "🏆", // Button with only the emoji
+                  data: { action: "view_leaderboard", path: "leaderboard" }
+              }
+          ]
+      },
+      {
+          type: "TextBlock",
+          text: "Check where you're at",
+          wrap: true
+      },
+      {
+          type: "ActionSet",
+          actions: [
+              {
+                  type: "Action.Submit",
+                  title: "🤸", // Button with only the emoji
+                  data: { action: "my_status", path: "user-stats" }
+              }
+          ]
+      },
+      {
+          type: "TextBlock",
+          text: "Learn more",
+          wrap: true
+      },
+      {
+          type: "ActionSet",
+          actions: [
+              {
+                  type: "Action.Submit",
+                  title: "📚", // Button with only the emoji
+                  data: { action: "learn_more", path: "learn" } // Adjust the path as needed
+              }
+          ]
+      }
+  ]
+};
+return userMenu;
+}
+// // Update an adaptive card
+// async function update_card( cardId, card ) {
+//   console.log("Updating card...");
+//   try {
+//     var resp = await platform.put(`/restapi/v1.0/glip/adaptive-cards/${cardId}`, card)
+//   }catch (e) {
+//     console.log(e.message)
+//   }
+// }
+
+// function make_hello_world_card(name) {
+//   var card = {
+//     type: "AdaptiveCard",
+//     $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+//     version: "1.3",
+//     body: [
+//       {
+//         type: "TextBlock",
+//         size: "Medium",
+//         weight: "Bolder",
+//         text: "Hello World"
+//       },
+//       {
+//         type: "TextBlock",
+//         text: "Enter your name in the field below so that I can say hello.",
+//         wrap: true
+//       },
+//       {
+//         type: "Input.Text",
+//         id: "hellotext",
+//         placeholder: "Enter your name"
+//       },
+//       {
+//         type: "ActionSet",
+//         actions: [
+//           {
+//             type: "Action.Submit",
+//             title: "Send a new card",
+//             data: {
+//               path: "new-card"
+//             }
+//           },
+//           {
+//             type: "Action.Submit",
+//             title: "Update this card",
+//             data: {
+//               path: "update-card"
+//             }
+//           }
+//         ]
+//       }
+//     ]
+//   }
+//   if (name){
+//     card.body.push({
+//       type: "Container",
+//       separator: true,
+//       items: [
+//         {
+//           type: "TextBlock",
+//           text: `Hello ${name}`,
+//           wrap: true
+//         }
+//       ]
+//     })
+//   }
+//   return card
+// // }
+
+// function make_new_name_card(name) {
+//   return {
+//     "type": "AdaptiveCard",
+//     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+//     "version": "1.3",
+//     "body": [
+//       {
+//         "type": "TextBlock",
+//         "size": "Medium",
+//         "weight": "Bolder",
+//         "text": "Hello World"
+//       },
+//       {
+//         "type": "TextBlock",
+//         "text": `Hello ${name}`,
+//         "wrap": true
+//       }
+//     ]
+//     }
+//   }
