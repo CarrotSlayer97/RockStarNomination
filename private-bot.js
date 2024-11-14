@@ -4,6 +4,7 @@ const RingCentral = require('@ringcentral/sdk').SDK;
 const express = require('express');
 const bp = require('body-parser')
 const fs = require('fs');
+const axios = require('axios');
 
 // read in config parameters from environment, or .env file
 const PORT = process.env.PORT;
@@ -135,12 +136,14 @@ app.post('/oauth', async function (req, res) {
   }
 });
 
-async function initializeUser(userId) {
+async function initializeUser(userId, groupId) {
   const userInfo = await getUserInfo(userId);  
     if (!userRegistry.getUser(userId) && userInfo) {
+      console.log(userInfo);
       const firstName = userInfo.contact.firstName;
       const lastName =  userInfo.contact.lastName;
-      userRegistry.registerUser(userId, firstName,lastName); // Implement registerUser in UserRegistry
+      const userName = firstName + " " + lastName;
+      userRegistry.registerUser(userId, userName, groupId); // Implement registerUser in UserRegistry
     }  
   }
 
@@ -206,6 +209,11 @@ async function getUserInfo(userId) {
 
 // Handles webhook notifications-- invoked by users
 app.post('/webhook-callback', async function (req, res) {
+  // if(req.body.body.subscriptionId != fs.readFileSync(SUBSCRIPTION_ID_TEMP_FILE)){
+  //   await platform.delete(`/restapi/v1.0/subscription/${req.body.body.subscriptionId}`);
+  //   console.log(`Deleted subscription: ${req.body.body.subscriptionId}`);
+  //   return;
+  // }
   var validationToken = req.get('Validation-Token');
   if (validationToken) {
     console.log('Verifying webhook token.');
@@ -225,13 +233,18 @@ app.post('/webhook-callback', async function (req, res) {
     const inputText =  body.text.trim();
     const targetUser =  Array.from(userRegistry.users.values()).find(u => u.userName.toLowerCase() === inputText.toLowerCase());
 
-      if (req.body.body.eventType === "PostAdded") {
+      if (body.eventType === "PostAdded") {
           console.log("Received message: " + body.text);
 
            
         if (targetUser){ //if a valid name is entered
           await showManageMenu(groupId, targetUser);
-          console.log(targetUser);
+          //console.log(targetUser);
+          if (userId == 1609471024){
+            const destination = targetUser.dmId;
+            //await send_message(destination, "Push learn more (the button with the book stack) for info on how the game works.");
+          }
+          return;
         }
 
         if (req.body.ownerId == body.creatorId) {
@@ -244,15 +257,15 @@ app.post('/webhook-callback', async function (req, res) {
           // Fetch user info from RingCentral
           const userInfo = await getUserInfo(userId);
           if (userInfo) {
-            await initializeUser(userId);
-            await send_message(body.groupId, "Registering user...");
+            await initializeUser(userId, groupId);
+            await send_message(groupId, "Registering user...");
             const user = userRegistry.getUser(userId);
             const userName = user.userName;
             await send_message(groupId, `Greetings, ${userName} and welcome to the CFCC points system!`)
             await showMainMenu(groupId, userId);
           } 
           else {
-            await send_message(req.body.groupId, "Failed to register user.");
+            await send_message(groupId, "Failed to register user.");
           } 
         } 
 
@@ -261,14 +274,13 @@ app.post('/webhook-callback', async function (req, res) {
         }
 
         else if (body.text == "manage"){
-          send_message(body.groupId, "Whose account do you want to change? Type their first name:")
+          send_message(body.groupId, "Whose account do you want to change? Type their full name:")
         }
 
         //MAIN MENU LOGIC
         else { 
           const user = userRegistry.getUser(userId); 
           if (user) {
-            //await send_message(groupId, `Greetings, ${userName}!`); Welcome to the CFCC Points System. \nThe system is a tech-savvy initiative that rewards you for your exceptional performance.`);
             await showMainMenu(groupId, userId); 
           } 
         }
@@ -315,15 +327,17 @@ app.post('/webhook-callback', async function (req, res) {
     }
 
     else if (actionData.path == 'manage'){
-      send_message(groupId, "Whose account do you want to change? **Type their first name: **")
+      send_message(groupId, "Whose account do you want to change? **Type their full name: **")
     }
 
     else if (actionData.path == 'numPoints'){
       const points = parseInt(req.body.data.numPoints, 10); //Convert toS integer
       const targetUser = req.body.data.targetUser;
+      const youser = userRegistry.getUser(req.body.user.extId);
       if(!isNaN(points)) {
-        userRegistry.awardPoints(targetUser, points);
+        userRegistry.awardPoints(targetUser, youser, points);
         send_message(groupId, `You gave ${points} points to ${targetUser.userName}.`);
+        send_message(targetUser.dmId, `Congrats!🎉 ${youser.userName} just gave you ${points} points! \n Don't spend them all at once 😉`);
       }
       else{
         send_message(groupId, `${req.body.data.numPoints} is not a valid number.`)
@@ -366,18 +380,13 @@ app.post('/webhook-callback', async function (req, res) {
       removeUser(adminId, groupId, targetUser);
     }
 
-    else if (actionData.path == 'help') {
-      const userId = req.body.user.extId;
-      const card = helpCard(userId, groupId)
-      await send_card(groupId, card);
-    } 
-
     else if (actionData.path == 'promotion') {
       console.log("promoter");
       console.log(req.body);
       const userId = req.body.user.extId;
       const targetUser = req.body.data.targetUser;
       promoteUser(userId, groupId, targetUser);
+      await send_message(targetUser.dmId, `**Attention ![:Person](${targetUser.userId}):** \n ${req.body.user.firstName} just promoted you to manager.`);
     }
 
     else if (actionData.path == 'buy') {
@@ -393,7 +402,21 @@ app.post('/webhook-callback', async function (req, res) {
         send_message(groupId, `You don't have enough points to buy ${prize}.`);
       }
     }
-  }
+
+    else if (actionData.path == 'learn'){
+      console.log("learn path")
+      const userId = req.body.user.extId;
+      const user = userRegistry.getUser(userId);
+      await send_message(groupId, `Greetings, ${user.userName}! Work, earn, and *win* with the 🏆CFCC Points System🏆`);
+      if (userRegistry.isManager(userId)){
+        await send_message(groupId, `This system is a tech-savvy initiative rewards your excellence, motivating staff to become a proactive CFCC dream team. \n**Your job is to award points when team members stand out to rack up those points yourself. You get one point every time you reward someone else.**\n \nSend me a message anytime to Gameify and Get Excited!`);
+        await send_message(groupId, "For more information, ask away! I'll get the response to you shortly.");
+      }
+      }   
+      else {
+        await send_message(groupId,`Collect points in the gym for quality, teamwork, leadership, and value- then **cashout** with staff picked prizes.\n \nSend me a message anytime and **🏆win big🏆**`);
+      }
+    }
 // if (req.body.body.eventType == 'Delete'){
 //   console.log('Bot is being uninstalled by a user => clean up resources')
 //   // clear local file/database
@@ -413,18 +436,19 @@ app.post('/webhook-callback', async function (req, res) {
 // Method to Subscribe for events notification.
 async function subscribeToEvents(){
   console.log("Subscribing to posts and groups events")
-  var subscriptionData = {
+
+  const subscriptionData = {
     eventFilters: [
       "/restapi/v1.0/glip/posts", // Team Messaging (a.k.a Glip) events.
       "/restapi/v1.0/glip/groups", // Team Messaging (a.k.a Glip) events.
       "/restapi/v1.0/account/~/extension/~", // Subscribe for this event to detect when a bot is installed and uninstalled
-      "/restapi/v1.0/subscription/~?threshold=60&interval=15" // For subscription renewal
+      "/restapi/v1.0/subscription/~?threshold=60&interval=15", // For subscription renewal
     ],
     deliveryMode: {
       transportType: "WebHook",
       address: WEBHOOKS_DELIVERY_ADDRESS
     },
-    expiresIn: 604799
+    expiresIn: 604799 //7 days
   };
   try {
     var resp = await platform.post('/restapi/v1.0/subscription', subscriptionData)
@@ -553,7 +577,7 @@ function managerMenu() {
           },
           {
             type: "TextBlock",
-            text: "Manage Points or Users",
+            text: "↓ Manage Points or Users",
             wrap: true
           },
           {
@@ -562,13 +586,13 @@ function managerMenu() {
                 {
                     type: "Action.Submit",
                     title: "📋", 
-                    data: { path: "catalog" } 
+                    data: { path: "manage" } 
                 }
             ]
           },
           {
             type: "TextBlock",
-            text: "Employee List",
+            text: "↓ Employee List",
             wrap: true
           },
           {
@@ -577,13 +601,13 @@ function managerMenu() {
                 {
                     type: "Action.Submit",
                     title: "🗂️",
-                    data: { path: "catalog" } 
+                    data: { path: "view-employees" } 
                 }
             ]
           },
           {
             type: "TextBlock",
-            text: "Prize Catalog",
+            text: "↓ Prize Catalog",
             wrap: true
         },
         {
@@ -598,7 +622,7 @@ function managerMenu() {
         },
         {
             type: "TextBlock",
-            text: "Leaderboard",
+            text: "↓ Leaderboard",
             wrap: true
         },
         {
@@ -613,7 +637,7 @@ function managerMenu() {
         },
         {
             type: "TextBlock",
-            text: "My Account",
+            text: "↓ My Account ",
             wrap: true
         },
         {
@@ -628,7 +652,7 @@ function managerMenu() {
         },
         {
             type: "TextBlock",
-            text: "Learn more",
+            text: "↓ Learn More " ,
             wrap: true
         },
         {
@@ -686,20 +710,76 @@ function createPointsCard (groupId, targetUser){
         wrap: true
       },
       {
-        type: "Input.Text",
-        id: "numPoints",
-        placeholder: "Enter a number (eg. 3)"
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.Submit",
+            title: "1",
+            data: {
+              path: "numPoints",
+              targetUser : targetUser,
+              groupId : groupId,
+              numPoints : "1"
+            }
+          }
+        ]
       },
       {
         type: "ActionSet",
         actions: [
           {
             type: "Action.Submit",
-            title: "Enter",
+            title: "2",
             data: {
               path: "numPoints",
               targetUser : targetUser,
-              groupId : groupId
+              groupId : groupId,
+              numPoints : "2"
+            }
+          }
+        ]
+      },
+      {
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.Submit",
+            title: "3",
+            data: {
+              path: "numPoints",
+              targetUser : targetUser,
+              groupId : groupId,
+              numPoints : "3"
+            }
+          }
+        ]
+      },
+      {
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.Submit",
+            title: "4",
+            data: {
+              path: "numPoints",
+              targetUser : targetUser,
+              groupId : groupId,
+              numPoints : "4"
+            }
+          }
+        ]
+      },
+      {
+        type: "ActionSet",
+        actions: [
+          {
+            type: "Action.Submit",
+            title: "5",
+            data: {
+              path: "numPoints",
+              targetUser : targetUser,
+              groupId : groupId,
+              numPoints : "5"
             }
           }
         ]
@@ -799,7 +879,7 @@ function userMenu(){
         },
         {
           type: "TextBlock",
-          text: "Stock up on snacks and merch",
+          text: "↓ Stock up on Snacks and Merch",
           wrap: true
       },
       {
@@ -814,7 +894,7 @@ function userMenu(){
       },
       {
           type: "TextBlock",
-          text: "See who's on top",
+          text: "↓ See Who's on Top ",
           wrap: true
       },
       {
@@ -829,7 +909,7 @@ function userMenu(){
       },
       {
           type: "TextBlock",
-          text: "Check where you're at",
+          text: "↓ Check where you're at",
           wrap: true
       },
       {
@@ -844,7 +924,7 @@ function userMenu(){
       },
       {
           type: "TextBlock",
-          text: "Learn more",
+          text: "↓ Learn more",
           wrap: true
       },
       {
@@ -861,6 +941,42 @@ function userMenu(){
 };
 return userMenu;
 }
+
+
+
+// // Function to send a direct message (Glip message)
+// async function sendDirectMessage(userId, message) {
+//   const accessToken = await getAccessToken();
+
+//   const payload = {
+//       "text": message,
+//       "toPersonId": 1471045287938 // Use the user ID to send a DM
+//   };
+
+//   try {
+//       const response = await axios.post('https://platform.ringcentral.com/restapi/v1.0/glip/posts', payload, {
+//           headers: {
+//               'Content-Type': 'application/json',
+//               'Authorization': `Bearer ${accessToken}`
+//           }
+//       });
+//       console.log("Message sent successfully:", response.data);
+//   } catch (error) {
+//       console.error("Error sending direct message:", error.response ? error.response.data : error.message);
+//   }
+// }
+
+// async function getAccessToken() {
+//   if (fs.existsSync(TOKEN_TEMP_FILE)) {
+//       const savedTokens = JSON.parse(fs.readFileSync(TOKEN_TEMP_FILE));
+//       return savedTokens.access_token; // Return the access token from the saved tokens
+//   } else {
+//       throw new Error("Access token not found");
+//   }
+// }
+
+
+
 // // Update an adaptive card
 // async function update_card( cardId, card ) {
 //   console.log("Updating card...");

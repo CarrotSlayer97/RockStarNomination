@@ -1,1 +1,1 @@
-{"users":{"1609471024":{"userName":"Regan","points":0,"roles":["user","admin"]}}}
+{"users":{"243124024":{"userName":"Frank Pasztor","points":0,"dmId":"1472294584322","roles":["user","manager"]},"1609471024":{"userName":"Regan Medcof","points":0,"dmId":"1471045287938","roles":["user","admin"]}}}

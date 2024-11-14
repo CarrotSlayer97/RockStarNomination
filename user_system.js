@@ -1,10 +1,13 @@
 class User {
-    constructor(userId, userName, roles = ['user']) {
+    constructor(userId, userName, dmId,roles = ['user']) {
         this.userId = userId;
         this.userName = userName;
         this.points = 0; // Initialize points
         this.roles = roles;
+        this.dmId = dmId; //The first place a user messages the chatbot
         
+        // Frank's dm Id: 1472294584322
+        //My dm Id: 1471045287938
     }
 }
 
@@ -24,7 +27,7 @@ class UserRegistry {
         const parsedData = JSON.parse(data); // Parse the JSON data
         for (const userId in parsedData.users) {
             const userInfo = parsedData.users[userId];
-            this.registerUser(userId, userInfo.userName, userInfo.roles); // Register each user
+            this.registerUser(userId, userInfo.userName, userInfo.dmId, userInfo.roles); // Register each user
             const user = this.getUser(userId);
             user.points = parseInt(userInfo.points, 10) || 0; // Set user points if available
             user.roles = userInfo.roles;
@@ -40,7 +43,9 @@ class UserRegistry {
             data.users[userId] = {
                 userName: user.userName,
                 points: user.points,
+                dmId: user.dmId,   
                 roles: user.roles
+                
             };
         });
         return JSON.stringify(data); // Convert to JSON string for saving
@@ -57,15 +62,15 @@ class UserRegistry {
         }
     }
 
-    registerUser(userId, userName, roles = ['user']) {
+    registerUser(userId, userName, dmId, roles = []) {
         if (!this.users.has(userId)) {  
-            const user = new User(userId, userName, roles);
+            roles = ['user']
+            console.log(dmId);
+            const user = new User(userId, userName, dmId, roles);
             this.users.set(userId, user);
-            //console.log('admin id is', this.ADMIN_USER_ID);
             if (userId == this.ADMIN_USER_ID && !user.roles.includes('admin')) {
                 roles.push('admin'); // Assign admin role
             }
-  
             console.log(`Registered user: ${userId} with name: ${userName}\n ${userName}'s roles are: ${roles}`);
             this.saveData(); //save data after registration
         }
@@ -75,13 +80,15 @@ class UserRegistry {
         return this.users.get(userId);
     }
 
-    awardPoints(targetUser, points) {
+    awardPoints(targetUser, manager,points) {
         if (targetUser) {
             const name = targetUser.userName
+            const managerName = manager.userName
             const pointsToAward = parseInt(points, 10);
             if (!isNaN(pointsToAward)){
                 targetUser.points += pointsToAward; // Award points to the user
-                console.log(`Gave ${pointsToAward} points to ${name}.`)
+                manager.points += 1; // Award points to the manager
+                console.log(`Gave ${pointsToAward} points to ${name} and one point to ${managerName}`)
                 //Update the user in the registry
                 this.users.set(targetUser.userId, targetUser);
                 this.saveData();
@@ -159,6 +166,14 @@ class UserRegistry {
         console.log("admin is", this.ADMIN_USER_ID);
         return userId == this.ADMIN_USER_ID;
     }
+
+    dmId(userId) {
+        const user = this.getUser(userId);
+        console.log(`Here's dmId ${user.dmId}`);
+        return user.dmId;
+    
+    }
 }
+
 
 module.exports = { UserRegistry, User};
