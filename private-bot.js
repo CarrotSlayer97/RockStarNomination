@@ -6,6 +6,7 @@ const bp = require('body-parser')
 const fs = require('fs');
 const axios = require('axios');
 
+
 // read in config parameters from environment, or .env file
 const PORT = process.env.PORT;
 const RINGCENTRAL_CLIENT_ID       = process.env.RINGCENTRAL_CLIENT_ID_PRIVATE;
@@ -39,6 +40,7 @@ app.get('/', function(req, res) {
 // Import necessary modules
 const { UserRegistry, User, message } = require('./user_system'); // Assuming you have a similar structure
 const ADMIN_USER_ID = 1609471024;
+const TEAM_ID = 141455048710;
 const userRegistry = new UserRegistry(); // Initialize your user registry
 
 
@@ -80,8 +82,6 @@ function main() {
   });
 }
 
-const userPoints = {}; // Object to store user points
-
 // Bot starts/restarts => check if there is a saved token
 async function loadSavedTokens(){
   if (fs.existsSync( TOKEN_TEMP_FILE )) {
@@ -90,7 +90,8 @@ async function loadSavedTokens(){
     console.log( "Reuse saved access token")
     await platform.auth().setData( savedTokens );
     if (fs.existsSync( SUBSCRIPTION_ID_TEMP_FILE )){
-      var subscriptionId = fs.readFileSync(SUBSCRIPTION_ID_TEMP_FILE)
+      var subscriptionId = fs.readFileSync(SUBSCRIPTION_ID_TEMP_FILE, 'utf8')
+      //console.log("subscription file:", fs.readFileSync(SUBSCRIPTION_ID_TEMP_FILE, 'utf8' ));
       checkWebhooksSubscription(subscriptionId)
     }else
       subscribeToEvents()
@@ -136,6 +137,7 @@ app.post('/oauth', async function (req, res) {
   }
 });
 
+
 async function initializeUser(userId, groupId) {
   const userInfo = await getUserInfo(userId);  
     if (!userRegistry.getUser(userId) && userInfo) {
@@ -153,10 +155,6 @@ function isAdmin(userId){
     return true;
   }
   false;
-}
-
-function getUserPoints(userId) {
-  return userPoints[userId] || 0; // Return points or 0 if not found
 }
 
 //give manager role
@@ -209,9 +207,11 @@ async function getUserInfo(userId) {
 
 // Handles webhook notifications-- invoked by users
 app.post('/webhook-callback', async function (req, res) {
-  // if(req.body.body.subscriptionId != fs.readFileSync(SUBSCRIPTION_ID_TEMP_FILE)){
-  //   await platform.delete(`/restapi/v1.0/subscription/${req.body.body.subscriptionId}`);
-  //   console.log(`Deleted subscription: ${req.body.body.subscriptionId}`);
+//USE IF BOT RESPONDS MULTIPLE TIMES
+  // if(req.body.subscriptionId != fs.readFileSync(SUBSCRIPTION_ID_TEMP_FILE, 'utf8' )){
+  //   console.log("found id: ", req.body.subscriptionId);
+  //   await platform.delete(`/restapi/v1.0/subscription/${req.body.subscriptionId}`);
+  //   console.log(`Deleted subscription: ${req.body.subscriptionId}`);
   //   return;
   // }
   var validationToken = req.get('Validation-Token');
@@ -231,18 +231,23 @@ app.post('/webhook-callback', async function (req, res) {
     const botId = req.body.ownerId;
     const groupId = body.groupId;
     const inputText =  body.text.trim();
-    const targetUser =  Array.from(userRegistry.users.values()).find(u => u.userName.toLowerCase() === inputText.toLowerCase());
+    const targetUser =  Array.from(userRegistry.users.values()).find(u => u.userName.toLowerCase() === inputText.toLowerCase()) || Array.from(userRegistry.users.values()).find(u => u.userName.split(' ')[0].toLowerCase() === inputText.toLowerCase());
+
 
       if (body.eventType === "PostAdded") {
           console.log("Received message: " + body.text);
 
-           
+        if (groupId == TEAM_ID){
+          console.log("Ignoring message posted to the team.");
+          return;
+        }
+
         if (targetUser){ //if a valid name is entered
           await showManageMenu(groupId, targetUser);
           //console.log(targetUser);
           if (userId == 1609471024){
-            const destination = targetUser.dmId;
-            //await send_message(destination, "Push learn more (the button with the book stack) for info on how the game works.");
+            welcomePts(targetUser);
+            return;
           }
           return;
         }
@@ -253,7 +258,7 @@ app.post('/webhook-callback', async function (req, res) {
         }
 
         // Check if the user isn't registered
-        if (!userRegistry.getUser(userId) && (userId != botId)) {
+        if (!userRegistry.getUser(userId) && (userId != botId) ) {
           // Fetch user info from RingCentral
           const userInfo = await getUserInfo(userId);
           if (userInfo) {
@@ -261,7 +266,6 @@ app.post('/webhook-callback', async function (req, res) {
             await send_message(groupId, "Registering user...");
             const user = userRegistry.getUser(userId);
             const userName = user.userName;
-            await send_message(groupId, `Greetings, ${userName} and welcome to the CFCC points system!`)
             await showMainMenu(groupId, userId);
           } 
           else {
@@ -271,10 +275,20 @@ app.post('/webhook-callback', async function (req, res) {
 
         else if (body.text == "ping") {
           send_message( body.groupId, "pong" );
+          sendDm();
+        }
+
+        else if (body.text == "createDm"){
+          createDm();
         }
 
         else if (body.text == "manage"){
-          send_message(body.groupId, "Whose account do you want to change? Type their full name:")
+          if (userId == ADMIN_USER_ID){
+            await send_card(body.groupId, myCard());
+          }
+          else{
+            send_message(body.groupId, "Whose account do you want to change? Type their name:")
+          }
         }
 
         //MAIN MENU LOGIC
@@ -315,15 +329,87 @@ app.post('/webhook-callback', async function (req, res) {
     }
 
     if (actionData.path == 'leaderboard') {
-      const leaderboard = userRegistry.getLeaderboard(); // Implement getLeaderboard in UserRegistry
-      send_message(groupId, `🏆 **Leaderboard** 🏆\n \n${leaderboard}`);
+      const nomineeLeaderboard = userRegistry.nomineeLeaderboard(); // Implement getLeaderboard in UserRegistry
+      const nominatorLeaderboard = userRegistry.nominatorLeaderboard();
+      await send_card(groupId, leaderboardCard(nomineeLeaderboard, nominatorLeaderboard)); // Assuming you have a function to send the card
+      //send_message(groupId, `🎫 **Rockstar Tickets** 🎫\n \n${nomineeLeaderboard}\n \n${nominatorLeaderboard}`);
     }
   
     else if (actionData.path == 'award-pts') {
       const managerId = req.body.user.extId;
-      const targetUser = req.body.data.targetUser;
+      const targetUser = actionData.targetUser;
       awardPoints(managerId, groupId, targetUser);
    
+    }
+
+    else if (actionData.path == 'nominate'){
+      await send_card(groupId, nominateCard());
+    }
+
+    else if (actionData.path == 'nomin'){
+      const userId = req.body.user.extId;
+      const user = userRegistry.getUser(userId);
+      const targetUsername = actionData.targetUser;
+      const fullName = user.userName;
+      const firstName = fullName.split(' ')[0]; // Get the first part of the full name
+      const targetUser = Array.from(userRegistry.users.values()).find(u => u.userName.toLowerCase() === targetUsername.toLowerCase()) || Array.from(userRegistry.users.values()).find(u => u.userName.split(' ')[0].toLowerCase() === targetUsername.toLowerCase());
+      if (targetUser){
+        if (targetUser != user){
+          const thank = `🎸**Rock and Roll Baby**!🎸 \n Thanks for the nomination, ${firstName}!`
+          const message = actionData.reason;
+          //console.log(req.body.data);
+          //console.log("reason:", message);
+          await userRegistry.nominateUser(user, targetUser);
+        
+         // Create the updated card
+        const updatedCard = {
+          type: "AdaptiveCard",
+          $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+          version: "1.3",
+          body: [
+            {
+              type: "TextBlock",
+              text: thank,
+              wrap: true
+            },
+            {
+              type: "TextBlock",
+              text: `A nominatior ticket was added to the prize draw under your name.`,
+              wrap: true
+            }
+          ],
+          actions: [
+          {
+              type: "Action.Submit",
+              title: "Done",
+              data: {
+                  path: "done"
+              }
+            }
+          ]
+        };
+
+  // Update the card
+        await update_card(req.body.card.id, updatedCard); // Assuming you have the cardId to update
+        await send_message(targetUser.dmId, `**Rock On ![:Person](${targetUser.userId})**!🤘 \n ${user.userName} saw your 🌟Rockstar Moment🌟! A nominee ticket was added to the prize draw under your name.`);
+        await send_message(TEAM_ID, `**🎸Rock star alert ![:Team](${TEAM_ID})!!** \n ![:Person](${targetUser.userId}) ${message}`);
+        if (targetUser.nominee_pts == 5 || targetUser.nominee_pts == 10 || targetUser.nominee_pts == 20){
+          await send_message(targetUser.dmId, `Rock and Roll ${targetUser.userName.split(' ')[0]}! Congrats on your ${targetUser.nominee_pts}th nomination! \n **⭐You earned the ${targetUser.badges[targetUser.badges.length - 1]} badge!⭐**`);
+        }
+        }
+        else{
+          await send_message(groupId, `Sorry, ${firstName}. You can't nominate yourself...`)
+          return;
+        }
+      }
+      else{
+          await send_message(groupId, `I couldn't find ${targetUsername} in the system. Make sure they're in the rockstar experience team and you spelt their name correctly.`);
+      }
+    }
+
+    else if (actionData.path == 'done'){
+      //await deleteMessage(req.body.id);
+      await showMainMenu(groupId, req.body.user.extId);
     }
 
     else if (actionData.path == 'manage'){
@@ -331,8 +417,8 @@ app.post('/webhook-callback', async function (req, res) {
     }
 
     else if (actionData.path == 'numPoints'){
-      const points = parseInt(req.body.data.numPoints, 10); //Convert toS integer
-      const targetUser = req.body.data.targetUser;
+      const points = parseInt(actionData.numPoints, 10); //Convert toS integer
+      const targetUser = actionData.targetUser;
       const youser = userRegistry.getUser(req.body.user.extId);
       if(!isNaN(points)) {
         userRegistry.awardPoints(targetUser, youser, points);
@@ -340,26 +426,27 @@ app.post('/webhook-callback', async function (req, res) {
         send_message(targetUser.dmId, `Congrats!🎉 ${youser.userName} just gave you ${points} points! \n Don't spend them all at once 😉`);
       }
       else{
-        send_message(groupId, `${req.body.data.numPoints} is not a valid number.`)
+        send_message(groupId, `${actionData.numPoints} is not a valid number.`)
       }  
     }
 
     else if (actionData.path == 'user-stats') {
       const userId = req.body.user.extId; 
-      console.log(userId);
+      //console.log(userId);
       const user = userRegistry.getUser(userId);
       if (user) {
-        send_message(groupId, `**Here's your account info:**\n \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}\nRole: ${user.roles}`);
+        await send_card(groupId, infoCard(userId, user.userName, user.nominee_pts, user.nominator_pts, user.badges));
+        //send_message(groupId, `**Here's your account info:**\nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nNominee Tickets: ${user.nominee_pts}\nNominator Tickets: ${user.nominator_pts}`);
       } else {
         send_message(groupId, "User not found.");
       }
     }
 
     else if (actionData.path == 'look-user') {
-      const targetUser = req.body.data.targetUser;
+      const targetUser = actionData.targetUser;
       const user = userRegistry.getUser(targetUser.userId);
       if (user) {
-        send_message(groupId, `**Here's ${targetUser.userName}'s account info **\n \nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nCurrent Points: ${user.points}`);
+        send_message(groupId, `**Here's ${targetUser.userName}'s account info **\nUser Id: ${user.userId} \nRegistered Name: ${user.userName} \nNominee Tickets: ${user.nominee_pts}\nNominator Tickets: ${user.nominator_pts}`);
       } 
     }
 
@@ -384,7 +471,7 @@ app.post('/webhook-callback', async function (req, res) {
       console.log("promoter");
       console.log(req.body);
       const userId = req.body.user.extId;
-      const targetUser = req.body.data.targetUser;
+      const targetUser = actionData.targetUser;
       promoteUser(userId, groupId, targetUser);
       await send_message(targetUser.dmId, `**Attention ![:Person](${targetUser.userId}):** \n ${req.body.user.firstName} just promoted you to manager.`);
     }
@@ -403,20 +490,116 @@ app.post('/webhook-callback', async function (req, res) {
       }
     }
 
+    else if (actionData.path == 'next'){
+      await send_message(groupId, `Introducing The CFCC Points System! \n \nThis system is a tech-savvy initiative rewards your excellence, motivating staff to become a proactive CFCC dream team. \n**Your job is to award points when team members stand out to rack up those points yourself. You get one point every time you reward someone else.**\n Let's Gamify and Get Excited!`);
+      await send_message(groupId,`Collect points in the gym for quality, teamwork, leadership, and value- then **cashout** with staff picked prizes.\n \nSend me a message anytime and **🏆win big🏆**`);
+      await send_message(groupId, `The new CFCC bot unlocks countless possibilities! Take a poll nominating the best warmup leader, the most enthusiastic coach, the best team player, the best DJ/Circles, to get everyone fired up!\nAll nominees win fliptastic prizes/CFCC points to spend on a set list of prizes!\n Don't just ask everyone for their enthusiasm, get some competitive energy flowing. Gamify and get excited- make it an honour to stand on top!\n
+        \n **⚠️Send the message "done" in the chat to return to the main menu.⚠️**`);
+    }
+
+    else if (actionData.path == 'moments'){
+      await send_message(groupId,`\n**Anytime you witness a Rockstar moment, nominate your teammate! Example 🌟Rockstar Moments🌟:**\n
+        \n**🎭On Stage:**
+        \nLeading an exceptional, energized warm-up that gets everyone fired up and ready.
+        \nPraising a student's effort and celebrating their success through an emphatic high-five, a cheer, or words of encouragement. (You'll know it's making an impact when they return to their line with a proud smile or glance toward their parents to see if they noticed.)
+        \nBuilding connections by remembering and asking about students' achievements and goals.
+        \nFinding creative ways to make each interaction fresh and engaging, such as introducing a fun twist to routines or adding a surprise element to a lesson.
+        \nNoticing when a student or parent seems unsure and offering proactive support, ensuring their needs are met with care and attentiveness.
+        \nMaintaining a professional demeanor by being punctual, prepared, and consistently delivering high-quality interactions.
+        \nKeeping the gym pristine, organized, and welcoming for everyone.
+        \nTaking ownership of your role by stepping up to resolve small issues before they escalate or ensuring an activity runs seamlessly.
+        \nGreeting each student and parent by name, with a welcoming smile, and making them feel like the most important people in the world.
+        \nPrioritizing safety by spotting students carefully, being vigilant about equipment use, and making sure everyone feels secure.
+        \nOffering to assist a teammate who's juggling tasks or cheering them on to keep morale high during a busy shift.
+        \n**💪Off Stage:**
+        \nInnovating and bringing fresh ideas to streamline operations or enhance the student and parent experience, making the gym run smoothly and helping us shine even brighter.
+        \nOrganizing and setting up equipment so that it's ready for every class.
+        \nKeeping the gym pristine and welcoming for everyone.
+        \nCompleting administrative tasks with attention to detail and timeliness.
+        \nTroubleshooting a technical issue or scheduling conflict to ensure smooth operations.
+        \nRepairing or maintaining equipment to avoid disruptions during class.
+        \nFinding ways to save time or create efficiencies that allow the team to focus more on delivering quality training and memorable experiences.\n
+        \n **⚠️Send the message "done" in our chat to return to the main menu.⚠️**`);
+    }
+
+    else if (actionData.path =='q_and_a'){
+      await send_message(groupId, `**Q: Who can nominate a team member?** \n A: Any team member can nominate any other team member! If you see someone bringing their best to the Front Stage, don't hesitate to nominate them. \n 
+        \n**Q: Is there a limit to how many nominations I can give or receive?** \n A: There's no limit! The more  🌟Rockstar Moments🌟 we celebrate the more opportunities you get to WIN BIG. \n 
+        \n**Q: Do nominations have to be work-related only?** \n A: Nominations should reflect actions that contribute to the Front Stage experience, including maintaining the environment, engaging students and parents, or supporting a teammate. \n 
+        \n**Q: What happens with the points I earn?** \n A: Every point converts into a ticket for the monthly prize draws - one for Rockstar Nominees and one for Rockstar Nominators. Winners will be announced at the end of each month during our monthly meeting, along with shout-outs to all nominated Rockstars and the most impactful contributions. \n 
+        \n**Q: How do we find out who won the monthly prize draw?** \n A: Winners will be announced at the end of each month and receive a Rockstar level prize! \n 
+        \n**Q: How are the most impactful contributions selected?** \n A: Managers will spotlight a top Rockstar performance each month. These moments might include someone who's gone above and beyond or whose contribution had a big impact on our students, parents, or team.\n 
+        \n **⚠️Send the message "done" in the chat to return to the main menu.⚠️**`);
+    }
+
+    else if (actionData.path == 'nomininfo'){
+      await send_message(groupId, `**Anytime you witness a Rockstar moment, nominate your teammate! Every nomination gives both the nominator and the nominee a ticket for the monthly prize draw!**
+        \n How to nominate: \n 1. Push the "Nominate a Rockstar" button on the main menu \n 2. Type the nominee's full name \n 3. Tell us about their Rockstar moment and why you're nominating them \n 4. Push the "Done" button\n 
+        \n Remeber, there's no limit to how many nominations you can give and recieve! Any team member can nominate any other team member. Don't be shy!\n
+        \n **⚠️Send the message "done" in the chat to return to the main menu.⚠️**`);
+    }
+
+    else if (actionData.path == 'raffleInfo'){
+      await send_message(groupId, `**There will be two prize draws each month:**
+        \n 🎁One draw from the Rockstar Nominees.\n 🎁One draw from the Rockstar Nominators.
+        \n**Win a gift card for your contributions to the 🎸Rockstar🎸 experience!** \n 
+        \n**⚠️Send the message "done" in the chat to return to the main menu.⚠️**`);
+    }
+
     else if (actionData.path == 'learn'){
-      console.log("learn path")
       const userId = req.body.user.extId;
       const user = userRegistry.getUser(userId);
-      await send_message(groupId, `Greetings, ${user.userName}! Work, earn, and *win* with the 🏆CFCC Points System🏆`);
+      await send_card(groupId, learnCard(user.userName));
+      //await send_message(groupId, `Greetings, ${user.userName}! Work, earn, and *win* with the 🏆CFCC Points System🏆`);
+  
       if (userRegistry.isManager(userId)){
         await send_message(groupId, `This system is a tech-savvy initiative rewards your excellence, motivating staff to become a proactive CFCC dream team. \n**Your job is to award points when team members stand out to rack up those points yourself. You get one point every time you reward someone else.**\n \nSend me a message anytime to Gameify and Get Excited!`);
         await send_message(groupId, "For more information, ask away! I'll get the response to you shortly.");
-      }
-      }   
-      else {
-        await send_message(groupId,`Collect points in the gym for quality, teamwork, leadership, and value- then **cashout** with staff picked prizes.\n \nSend me a message anytime and **🏆win big🏆**`);
+      }  
+      // else {
+      //   await send_message(groupId,`Collect points in the gym for quality, teamwork, leadership, and value- then **cashout** with staff picked prizes.\n \nSend me a message anytime and **🏆win big🏆**`);
+      // }
+    } 
+    else if (actionData.path == 'clear_pts'){
+      const name = actionData.targetUser;
+      const targetUser = userRegistry.getUser(name);
+      userRegistry.clearPoints(targetUser);
+    }
+
+    else if (actionData.path == 'clear_badges'){
+      const targetUser = actionData.targetUser;
+      userRegistry.clearBadges(targetUser);
+    }
+
+    else if (actionData.path == 'minus_nominee_pt'){
+      const targetUser = actionData.targetUser;
+      userRegistry.minusNomineePt(targetUser);
+    }
+
+    else if (actionData.path == 'minus_nominator_pt'){
+      const targetUser = actionData.targetUser;
+      userRegistry.minusNominatorPt(targetUser);
+    }
+
+    else if (actionData.path == 'pts_reset'){
+      userRegistry.ptsReset();
+    }
+
+    else if (actionData.path == 'send_dm'){
+      const message = actionData.message;
+      const targetUser = actionData.targetUser;
+      await send_message(targetUser, message);
+    }
+
+    else if (actionData.path == 'all_dm'){
+      const message = actionData.message;
+      const allUsers = Array.from(userRegistry.users.values()).map(user => user.userId);
+      for (const user of allUsers){
+        await send_message(user, message);
       }
     }
+  }
+
 // if (req.body.body.eventType == 'Delete'){
 //   console.log('Bot is being uninstalled by a user => clean up resources')
 //   // clear local file/database
@@ -867,34 +1050,64 @@ function userMenu(){
     body: [
         {
             type: "TextBlock",
-            text: "It's Time to Win Big!",
+            text: "**🎸 Rock and Roll Baby! 🎸**",
             size: "Large",
             weight: "Bolder"
         },
         {
             type: "TextBlock",
-            text: "Earn points in the gym to get fliptastic prizes!",
+            text: "This is the main menu. Earn tickets in the gym to win fliptastic prizes!",
             size: "Medium",
             wrap: true
         },
-        {
-          type: "TextBlock",
-          text: "↓ Stock up on Snacks and Merch",
-          wrap: true
+      //   {
+      //     type: "TextBlock",
+      //     text: "↓ Stock up on Snacks and Merch",
+      //     wrap: true
+      // },
+    //   {
+    //     type: "ActionSet",
+    //     actions: [
+    //         {
+    //             type: "Action.Submit",
+    //             title: "🎁", // Button with only the emoji
+    //             data: { path: "catalog" } 
+    //         }
+    //     ]
+    // },
+      {
+        type: "TextBlock",
+        text: "↓ Nominate a Rockstar",
+        wrap: true
       },
       {
           type: "ActionSet",
           actions: [
               {
                   type: "Action.Submit",
-                  title: "🎁", // Button with only the emoji
-                  data: { path: "catalog" } 
+                  title: "🤘", // Button with only the emoji
+                  data: { path: "nominate" } 
               }
           ]
       },
       {
+        type: "TextBlock",
+        text: "↓ Your Account and Tickets",
+        wrap: true
+      },
+      {
+        type: "ActionSet",
+        actions: [
+            {
+                type: "Action.Submit",
+                title: "🎟️", // Button with only the emoji
+                data: { action: "my_status", path: "user-stats" }
+            }
+        ]
+      },
+      {
           type: "TextBlock",
-          text: "↓ See Who's on Top ",
+          text: "↓ See Who's in the Draw",
           wrap: true
       },
       {
@@ -902,23 +1115,8 @@ function userMenu(){
           actions: [
               {
                   type: "Action.Submit",
-                  title: "🏆", // Button with only the emoji
+                  title: "🕶", // Button with only the emoji
                   data: { action: "view_leaderboard", path: "leaderboard" }
-              }
-          ]
-      },
-      {
-          type: "TextBlock",
-          text: "↓ Check where you're at",
-          wrap: true
-      },
-      {
-          type: "ActionSet",
-          actions: [
-              {
-                  type: "Action.Submit",
-                  title: "🤸", // Button with only the emoji
-                  data: { action: "my_status", path: "user-stats" }
               }
           ]
       },
@@ -936,13 +1134,370 @@ function userMenu(){
                   data: { action: "learn_more", path: "learn" } // Adjust the path as needed
               }
           ]
-      }
+      }//,
+    // {
+    //     type: "TextBlock",
+    //     text: "↓ Points System Concept (for Frank)",
+    //     wrap: true
+    // },
+    // {
+    //     type: "ActionSet",
+    //     actions: [
+    //         {
+    //             type: "Action.Submit",
+    //             title: " 💡 ", // Button with only the emoji
+    //             data: { action: "next_draw", path: "next" } // Adjust the path as needed
+    //         }
+    //     ]
+    // }
   ]
 };
 return userMenu;
 }
 
 
+function nominateCard(){
+  const card = {
+    type: "AdaptiveCard",
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.3",
+    body: [
+      {type: "TextBlock", text: "Who are you nominating today?", size: "Medium", weight: "Bolder"},
+      {
+        type: "Input.Text",
+        id: "targetUser", // ID for the name input
+        placeholder: "full name (eg. Taylor Swift)",
+        isRequired: true,
+        errorMessage: `Who's the rockstar? Make sure they're in the rockstar experience team, and check that you spelt their name correctly.\n \n For help with the spelling: \n1. Open the "Rockstar Experience" team \n 2. Select their contact under team members and view their profile (On mobile press the team name)\n 3. Copy their name (ctrl+c on computer or hold your finger over the name on mobile)\n 4. Paste the name in the field above.`
+      },
+      {
+          type: "TextBlock",
+          text: "🎸Describe their unique Rockstar Moment:",
+          wrap: true
+      },
+      {
+          type: "Input.Text",
+          id: "reason", // ID for the reason input
+          placeholder: "eg. made one of our students feel like superstars today with her warm, individualized encouragement and by celebrating each of their achievements!",
+          isMultiline: true, // Allows for multiple lines of input
+          isRequired: true,
+          errorMessage: "How did they shine?"
+      }
+    ],
+    actions: [
+    {
+        type: "Action.Submit",
+        title: "Nominate🤘",
+        data: {
+            path: "nomin"
+        }
+    }
+    ]
+  };
+
+  return card; // Return the constructed card
+}
+
+function infoCard(userId, userName, nominee_pts, nominator_pts, badges){
+  const badgeText = badges.length > 0 ? badges.join(', ') : 'No badges awarded'; // Create a string of badges or a default message
+
+  const card = {
+        type: "AdaptiveCard",
+        $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+        version: "1.3",
+        body: [
+            {
+                type: "TextBlock",
+                text: `${userName}'s account info:`,
+                size: "Medium",
+                weight: "Bolder"
+            },
+            {
+                type: "TextBlock",
+                text: `🎸Nominee Tickets: ${nominee_pts}`,
+                wrap: true
+            },
+            {
+                type: "TextBlock",
+                text: `🎤Nominator Tickets: ${nominator_pts}`,
+                wrap: true
+            },
+            {
+              type: "TextBlock",
+              text: `🏅Badges: ${badgeText}`,
+              wrap: true
+            },
+            {
+              type: "TextBlock",
+              text: `User Id: ${userId}`,
+              wrap: true
+            }
+        ],
+        actions: [
+            {
+                type: "Action.Submit",
+                title: "Done",
+                data: {
+                    path: "done" // You can adjust the path as needed
+                }
+            }
+        ]
+    };
+    return card; // Return the constructed card
+}
+
+function leaderboardCard(nominees, nominators){
+  const card = {
+        type: "AdaptiveCard",
+        $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+        version: "1.3",
+        body: [
+            {
+                type: "TextBlock",
+                text: "🌟 **Top of The Charts** 🌟",
+                size: "Medium",
+                weight: "Bolder"
+            },
+            {
+              type: "TextBlock",
+              text: "🎸Nominee Leaderboard:",
+              weight: "Bolder",
+              wrap: true
+          },
+          {
+              type: "TextBlock",
+              text: nominees, // This should be a formatted string of the nominee leaderboard
+              wrap: true
+          },
+          {
+              type: "TextBlock",
+              text: "🎤Nominator Leaderboard:",
+              weight: "Bolder",
+              wrap: true
+          },
+          {
+              type: "TextBlock",
+              text: nominators, // This should be a formatted string of the nominator leaderboard
+              wrap: true
+          }
+        ],
+        actions: [
+            {
+                type: "Action.Submit",
+                title: "Done",
+                data: {
+                    path: "done" // You can adjust the path as needed
+                }
+            }
+        ]
+    };
+
+    return card; // Return the constructed card
+}
+
+function learnCard(userName){
+const card = {
+    type: "AdaptiveCard",
+    $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+    version: "1.3",
+    body: [
+        {
+            type: "TextBlock",
+            text: `**Greetings, ${userName}! 🌟It's time to Rock and Roll Baby!🌟**`,
+            wrap: true
+        },
+        {
+            type: "TextBlock",
+            text: "Think of yourself as part of a rock band contributing to the energy and excitement of the performance! Every interaction matters, make the audience feel our CFCC 🎸Rock and Roll🎸 magic.",
+            wrap: true
+        }
+    ],
+    actions: [
+        {
+            type: "Action.Submit",
+            title: "Q and A",
+            data: {
+                path: "q_and_a"
+            }
+        },
+        {
+            type: "Action.Submit",
+            title: "Example Rockstar Moments",
+            data: {
+                path: "moments"
+            }
+        },
+        {
+            type: "Action.Submit",
+            title: "Prizes and Winners",
+            data: {
+                path: "raffleInfo"
+            }
+        },
+        {
+            type: "Action.Submit",
+            title: "How to Nominate",
+            data: {
+                path: "nomininfo"
+            }
+        },
+        {
+            type: "Action.Submit",
+            title: "Main Menu",
+            data: {
+                path: "done"
+            }
+        }
+
+    ]
+};
+return card;
+}
+
+  function myCard(){
+    const card = {
+      type: "AdaptiveCard",
+      $schema: "http://adaptivecards.io/schemas/adaptive-card.json",
+      version: "1.3",
+      body: [
+        {type: "TextBlock", text: "Admin Level Actions", size: "Medium", weight: "Bolder"},
+        {
+          type: "Input.Text",
+          id: "targetUser", // ID for the name input
+          placeholder: "If required, enter the name of the your target user.",
+          isRequired: false,
+        },
+        {
+          type: "Input.Text",
+          id: "message", // ID for the name input
+          placeholder: "If required, enter the message you want to send.",
+          isRequired: false,
+        }
+      ],
+
+      actions: [
+        {
+          type: "ActionSet", actions: [
+          {type: "Action.Submit", title: "Promote User", data: {path: "promotion"}},
+          {type: "Action.Submit", title: "Subtract 1 Nominee Point", data: {path: "minus_nominee_pt"}},
+          {type: "Action.Submit", title: "Subtract 1 Nominator Point", data: {path: "minus_nominator_pt"}},
+          {type: "Action.Submit", title: "Clear All Tickets", data: {path: "clear_pts"}},
+          {type: "Action.Submit", title: "Clear All Badges", data: {path: "clear_badges"}},
+          {type: "Action.Submit", title: "Set All Users' Points to 0", data: {path: "pts_reset"}},
+          {type: "Action.Submit", title: "Send Dm", data: {path: "send_dm"}},
+          {type: "Action.Submit", title: "Dm all users", data: {path: "all_dm"}},
+          {type: "Action.Submit", title: "Remove User", data: {path: "purge"}},
+          {type: "Action.Submit", title: "Done", data: {path: "done"}}
+          ]
+        }
+      ]
+    }
+    return card;
+  }
+
+async function createDm(){
+  try {
+    // Step 1: Get all users in the company
+    const usersResponse = await platform.get('/restapi/v1.0/account/~/extension');
+    const allUsers = usersResponse.json().records;
+
+    const messagesResponse = await platform.get('/restapi/v1.0/account/~/extension/~/message-store');
+    const messages = messagesResponse.json().records;
+    const usersWhoMessagedBot = new Set(messages.map(message => message.from.id));
+    const usersNeverMessagedBot = allUsers.filter(user => !usersWhoMessagedBot.has(user.id));
+  
+
+    // Step 2: Create a chat with each user and get chatId
+    for (const user of usersNeverMessagedBot) {
+        const userId = user.id; // User extension ID
+        const chatResponse = await platform.post('/restapi/v1.0/glip/chats', {
+            "members": [
+                {
+                    "id": userId // Add the user's ID to the chat
+                }
+            ]
+        });
+
+        const chatId = chatResponse.json().id; // Get the chat ID from the response
+        console.log(`Chat ID for user ${user.userName} (${userId}): ${chatId}`);
+      }
+    }catch (e) {
+    console.log("Error:", e);
+    }
+}
+
+  //       // Send a message to the newly created chat
+  //       await platform.post(`/restapi/v1.0/glip/chats/${chatId}/posts`, {
+  //           "text": "Hello! This is a direct message."
+  //       });
+
+  //       console.log("Message sent successfully to the user.");
+  //   } catch (e) {
+  //       console.log("Error sending message:", e);
+  //   }
+  // }
+
+async function sendDm(toExt, message){
+  //const groupId = "1472985997314";
+  const personId = "1609471024";
+  //console.log(groupId);
+  console.log(personId);
+  try {
+    const response = await platform.post(`/restapi/v1.0/glip/posts`, {
+        "text":":9", // Use the provided message
+        "toPersonId": personId // Ensure this is the correct person ID
+    });
+    console.log("Message sent successfully:", response.data); 
+  } catch (error) {
+    console.error("Error sending direct message:", error.response ? error.response.data : error.message);
+  }
+  try {
+    const response = await platform.post('/restapi/v1.0/account/~/extension/~/sms', {
+      "to": [
+          {
+              "phoneNumber": "recipient_phone_number" // Replace with the actual recipient's phone number
+          }
+      ],
+      "from": {
+          "phoneNumber": "your_extension_phone_number" // Replace with your extension's phone number
+      },
+      "text": message
+  });
+    console.log("Message sent successfully:", response.json());
+  } catch (e) {
+    console.log("Error sending message:", e);
+  }
+}
+
+async function deleteMessage(messageId){
+  try {
+    const response = await platform.delete(`/restapi/v1.0/glip/posts/${messageId}`);
+    console.log("Message deleted successfully:", response.data);
+  } catch (error) {
+    console.error("Error deleting message:", error.response ? error.response.data : error.message);
+  }
+}
+
+// Function to welcome a new user and award them a Nominee Ticket
+async function welcomePts(user){
+  const fullName = user.userName;
+  const firstName = fullName.split(' ')[0];
+  const message = `🎸Greetings ${user.userName}! 🎸\n \nAs thanks for registering promptly you've been awarded a Nominee Ticket for our Christmas Raffle! \n Rock on ${firstName}!🤘 \n Let's make it the first of many.`
+  user.nominee_pts += 1;
+  userRegistry.users.set(user.userId, user);
+  userRegistry.saveData();
+  await send_message(user.dmId, message);
+}
+
+// Update an adaptive card
+async function update_card( cardId, card ) {
+  console.log("Updating card...");
+  try {
+    var resp = await platform.put(`/restapi/v1.0/glip/adaptive-cards/${cardId}`, card)
+  }catch (e) {
+    console.log(e.message)
+  }
+}
 
 // // Function to send a direct message (Glip message)
 // async function sendDirectMessage(userId, message) {
@@ -976,16 +1531,6 @@ return userMenu;
 // }
 
 
-
-// // Update an adaptive card
-// async function update_card( cardId, card ) {
-//   console.log("Updating card...");
-//   try {
-//     var resp = await platform.put(`/restapi/v1.0/glip/adaptive-cards/${cardId}`, card)
-//   }catch (e) {
-//     console.log(e.message)
-//   }
-// }
 
 // function make_hello_world_card(name) {
 //   var card = {
